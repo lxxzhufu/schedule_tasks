@@ -1,0 +1,20 @@
+services:
+  app:
+    # build configuration for the "app" service:
+    # - 'context: .' tells docker to use the current directory as the build context
+    # - 'dockerfile: dockerfile' specifies the file to use for building the image
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    # mounts the local "app" directory into the container so code changes are reflected without rebuild
+    volumes:
+      - .env:/app/.env
+      - /mnt:/mnt
+    # ports:
+    #   - "8000:8000"
+
+    # passes the database_url environment variable to the container
+    environment:
+      - LOG_LEVEL=DEBUG
+    command: ["uv", "run", "main.py"]
