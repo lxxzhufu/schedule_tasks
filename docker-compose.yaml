@@ -9,7 +9,7 @@ services:
 
     # mounts the local "app" directory into the container so code changes are reflected without rebuild
     volumes:
-      - .env:/app/.env
+      # - .env:/app/.env
       - /mnt:/mnt
     # ports:
     #   - "8000:8000"
