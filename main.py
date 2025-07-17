@@ -33,6 +33,25 @@ def sanitize_filename(filename):
     return re.sub(r"\s+", " ", sanitized).strip()
 
 
+def should_process_file(filename, task_config):
+    """根据任务配置中的关键字检查文件名。"""
+    key_words_str = task_config.get("key_words", "").strip()
+    if not key_words_str:
+        return True  # 没有设置关键字，始终处理
+
+    key_words = [kw.strip() for kw in key_words_str.split(",") if kw.strip()]
+    if not key_words:
+        return True  # 关键字列表为空（例如, key_words = , , ），同样处理
+
+    base_filename = os.path.basename(filename)
+    if any(kw in base_filename for kw in key_words):
+        logger.debug(f"文件名 '{base_filename}' 包含关键字，将被处理。")
+        return True
+    else:
+        logger.debug(f"文件名 '{base_filename}' 不包含任何关键字，跳过。")
+        return False
+
+
 def get_strm_and_thumb_paths(relative_video_path, task_config):
     """根据相对路径和任务配置，计算出对应的.strm和缩略图文件的绝对路径。"""
     local_strm_base_dir = task_config["local_strm_dir"]
@@ -72,7 +91,7 @@ def generate_thumbnail(video_source, thumb_path, task_config):
     thumb_dir = os.path.dirname(thumb_path)
     os.makedirs(thumb_dir, exist_ok=True)
     if os.path.exists(thumb_path):
-        logger.debug(f"缩略图已存在，跳过: {thumb_path}")
+        logger.info(f"缩略图已存在，跳过: {thumb_path}")
         return True
 
     thumbnail_size = task_config.get("thumbnail_size", "").strip()
@@ -135,6 +154,10 @@ def generate_thumbnail(video_source, thumb_path, task_config):
 def process_single_file(absolute_video_path, task_config):
     """处理单个本地视频文件：创建.strm和缩略图。"""
     task_name = task_config["name"]
+    # --- 新增关键字检查 ---
+    if not should_process_file(absolute_video_path, task_config):
+        return
+    # --- 结束 ---
     monitor_path = task_config["local_monitor_path"]
     relative_path = os.path.relpath(absolute_video_path, monitor_path)
     strm_path, thumb_path = get_strm_and_thumb_paths(relative_path, task_config)
@@ -296,14 +319,39 @@ def run_full_scan_and_cleanup(task_config, source_files_map):
     """通用全量扫描函数：对比源和目标，进行创建、更新和清理。"""
     task_name = task_config["name"]
     local_strm_base_dir = task_config["local_strm_dir"]
+    total_files = len(source_files_map)
 
-    logger.info(
-        f"任务 '{task_name}': 开始全量扫描，发现 {len(source_files_map)} 个源文件。"
+    # --- 文件过滤和日志记录 ---
+    files_to_process_map = {}
+    skipped_count = 0
+    
+    key_words_str = task_config.get("key_words", "").strip()
+    # 检查关键字列表是否有效
+    has_keywords = bool(key_words_str and [kw.strip() for kw in key_words_str.split(",") if kw.strip()])
+
+    if has_keywords:
+        # 预处理文件列表以生成日志
+        for rel_path, source_url_or_path in source_files_map.items():
+            if should_process_file(rel_path, task_config):
+                files_to_process_map[rel_path] = source_url_or_path
+            else:
+                skipped_count += 1
+    else:
+        files_to_process_map = source_files_map
+
+    log_message = (
+        f"任务 '{task_name}': 开始全量扫描，发现 {total_files} 个源文件。"
     )
+    if has_keywords:
+        processed_count = len(files_to_process_map)
+        log_message += f" 将处理 {processed_count} 个，因关键字不匹配而跳过 {skipped_count} 个。"
+    
+    logger.info(log_message)
+    # --- 结束 ---
 
     current_strm_files_on_disk = set()
     # 1. 创建或更新文件
-    for rel_path, source_url_or_path in source_files_map.items():
+    for rel_path, source_url_or_path in files_to_process_map.items():
         strm_path, thumb_path = get_strm_and_thumb_paths(rel_path, task_config)
         current_strm_files_on_disk.add(strm_path)
 
@@ -321,6 +369,8 @@ def run_full_scan_and_cleanup(task_config, source_files_map):
             with open(strm_path, "w", encoding="utf-8") as f:
                 f.write(source_url_or_path)
             logger.info(f"任务 '{task_name}': 已创建/更新STRM: {strm_path}")
+        else:
+            logger.info(f"任务 '{task_name}': STRM文件已是最新，跳过: {strm_path}")
 
         if thumb_path:
             generate_thumbnail(source_url_or_path, thumb_path, task_config)
@@ -416,6 +466,7 @@ def load_config(config_file="config.ini"):
                 "thumbnail_suffix": config.get(
                     section, "thumbnail_suffix", fallback="poster"
                 ).strip(),
+                "key_words": config.get(section, "key_words", fallback="").strip(),
             }
 
             # --- 新增: 自动创建任务目录 ---
